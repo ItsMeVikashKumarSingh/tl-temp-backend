@@ -18,16 +18,25 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(8080),
   FRONTEND_ORIGIN: z.string().default('http://localhost:5173'),
   SUPABASE_URL: z.string().url(),
-  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
+  // Prefer the new Supabase "secret key" (sb_secret_...), but allow legacy service_role too.
+  SUPABASE_SECRET_KEY: z.string().min(1).optional(),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1).optional(),
   RESEND_API_KEY: z.string().min(1),
   RESEND_FROM_EMAIL: z.string().min(1),
 });
 
-const env = envSchema.parse(process.env);
+const env = envSchema
+  .refine(
+    (e) => Boolean(e.SUPABASE_SECRET_KEY || e.SUPABASE_SERVICE_ROLE_KEY),
+    { message: 'Set SUPABASE_SECRET_KEY (preferred) or SUPABASE_SERVICE_ROLE_KEY' },
+  )
+  .parse(process.env);
+
+const supabaseAdminKey = env.SUPABASE_SECRET_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY!;
 
 const app = express();
 const resend = new Resend(env.RESEND_API_KEY);
-const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
+const supabase = createClient(env.SUPABASE_URL, supabaseAdminKey, {
   auth: { persistSession: false },
 });
 

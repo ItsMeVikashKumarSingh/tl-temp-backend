@@ -45,4 +45,9 @@ Duplicate response:
 
 ```json
 { "ok": true, "service": "tl-temp-backend" }
+
+## Supabase Key Note
+
+Use `SUPABASE_SECRET_KEY` (format `sb_secret_...`) if available. The older JWT-based
+`SUPABASE_SERVICE_ROLE_KEY` may still work, but is no longer the recommended option.
 ```
