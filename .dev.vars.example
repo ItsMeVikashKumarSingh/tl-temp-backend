@@ -1,0 +1,5 @@
+FRONTEND_ORIGIN=http://localhost:5173
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SECRET_KEY=your-secret-key
+RESEND_API_KEY=re_your_resend_key
+RESEND_FROM_EMAIL=Transfer Legacy <waitlist@transferlegacy.com>

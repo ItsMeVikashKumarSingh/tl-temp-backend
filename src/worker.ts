@@ -1,9 +1,13 @@
-import cors from 'cors';
-import 'dotenv/config';
-import express from 'express';
-import { Resend } from 'resend';
 import { createClient } from '@supabase/supabase-js';
-import { z } from 'zod';
+
+type Env = {
+  FRONTEND_ORIGIN?: string;
+  SUPABASE_URL: string;
+  SUPABASE_SECRET_KEY?: string;
+  SUPABASE_SERVICE_ROLE_KEY?: string;
+  RESEND_API_KEY: string;
+  RESEND_FROM_EMAIL: string;
+};
 
 type WaitlistRow = {
   id: string;
@@ -14,63 +18,62 @@ type WaitlistRow = {
   metadata: Record<string, unknown>;
 };
 
-const envSchema = z.object({
-  PORT: z.coerce.number().int().positive().default(8080),
-  FRONTEND_ORIGIN: z.string().default('http://localhost:5173'),
-  SUPABASE_URL: z.string().url(),
-  // Prefer the new Supabase "secret key" (sb_secret_...), but allow legacy service_role too.
-  SUPABASE_SECRET_KEY: z.string().min(1).optional(),
-  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1).optional(),
-  RESEND_API_KEY: z.string().min(1),
-  RESEND_FROM_EMAIL: z.string().min(1),
-});
+const jsonHeaders = {
+  'content-type': 'application/json; charset=utf-8',
+};
 
-const env = envSchema
-  .refine(
-    (e) => Boolean(e.SUPABASE_SECRET_KEY || e.SUPABASE_SERVICE_ROLE_KEY),
-    { message: 'Set SUPABASE_SECRET_KEY (preferred) or SUPABASE_SERVICE_ROLE_KEY' },
-  )
-  .parse(process.env);
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+    const corsHeaders = buildCorsHeaders(request, env);
 
-const supabaseAdminKey = env.SUPABASE_SECRET_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY!;
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: corsHeaders });
+    }
 
-const app = express();
-const resend = new Resend(env.RESEND_API_KEY);
-const supabase = createClient(env.SUPABASE_URL, supabaseAdminKey, {
-  auth: { persistSession: false },
-});
+    if (request.method === 'GET' && url.pathname === '/health') {
+      return jsonResponse({ ok: true, service: 'tl-temp-backend' }, 200, corsHeaders);
+    }
 
-const waitlistSignupSchema = z.object({
-  email: z.string().trim().email(),
-  name: z.string().trim().min(1).optional(),
-});
+    if (
+      request.method === 'POST' &&
+      (url.pathname === '/api/waitlist' || url.pathname === '/v1/api/waitlist')
+    ) {
+      return handleWaitlistSignup(request, env, corsHeaders);
+    }
 
-app.use(express.json({ limit: '32kb' }));
-app.use(
-  cors({
-    origin: env.FRONTEND_ORIGIN.split(',').map((origin) => origin.trim()),
-    methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type'],
-  }),
-);
+    return jsonResponse({ message: 'Not found' }, 404, corsHeaders);
+  },
+};
 
-app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'tl-temp-backend' });
-});
+async function handleWaitlistSignup(
+  request: Request,
+  env: Env,
+  corsHeaders: Headers,
+): Promise<Response> {
+  const body = await safeParseJson(request);
+  const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : '';
+  const name = typeof body?.name === 'string' ? body.name.trim() : undefined;
 
-app.post(['/api/waitlist', '/v1/api/waitlist'], async (req, res) => {
-  const parsed = waitlistSignupSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ message: 'Please enter a valid email address' });
+  if (!isValidEmail(email)) {
+    return jsonResponse({ message: 'Please enter a valid email address' }, 400, corsHeaders);
   }
 
-  const email = parsed.data.email.toLowerCase();
+  const supabaseKey = env.SUPABASE_SECRET_KEY ?? env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!env.SUPABASE_URL || !supabaseKey || !env.RESEND_API_KEY || !env.RESEND_FROM_EMAIL) {
+    return jsonResponse({ message: 'Server configuration is incomplete' }, 500, corsHeaders);
+  }
+
+  const supabase = createClient(env.SUPABASE_URL, supabaseKey, {
+    auth: { persistSession: false },
+  });
+
   const metadata = {
     source: 'landing_waitlist',
-    name: parsed.data.name ?? null,
-    user_agent: req.get('user-agent') ?? null,
-    referrer: req.get('referer') ?? null,
-    accept_language: req.get('accept-language') ?? null,
+    name: name || null,
+    user_agent: request.headers.get('user-agent'),
+    referrer: request.headers.get('referer'),
+    accept_language: request.headers.get('accept-language'),
     captured_at: new Date().toISOString(),
   };
 
@@ -82,61 +85,76 @@ app.post(['/api/waitlist', '/v1/api/waitlist'], async (req, res) => {
 
   if (inserted.error) {
     if (inserted.error.code === '23505') {
-      const existing = await findWaitlistEntry(email);
-      if (!existing) {
-        return res.status(500).json({ message: 'Waitlist signup could not be confirmed' });
+      const existing = await supabase
+        .from('waitlist')
+        .select('id,email,position,created_at,confirmed,metadata')
+        .eq('email', email)
+        .maybeSingle<WaitlistRow>();
+
+      if (existing.error || !existing.data) {
+        return jsonResponse(
+          { message: 'Waitlist signup could not be confirmed' },
+          500,
+          corsHeaders,
+        );
       }
 
-      return res.json({
-        message: 'Already on waitlist',
-        position: existing.position,
-        isNew: false,
-      });
+      return jsonResponse(
+        {
+          message: 'Already on waitlist',
+          position: existing.data.position,
+          isNew: false,
+        },
+        200,
+        corsHeaders,
+      );
     }
 
     console.error('Supabase waitlist insert failed:', inserted.error);
-    return res.status(500).json({ message: 'Waitlist signup failed. Please try again.' });
+    return jsonResponse({ message: 'Waitlist signup failed. Please try again.' }, 500, corsHeaders);
   }
 
   try {
-    await sendWelcomeEmail(inserted.data);
+    await sendWelcomeEmail(inserted.data, env);
   } catch (error) {
     console.error('Resend waitlist email failed:', error);
   }
 
-  return res.status(201).json({
-    message: 'Successfully joined waitlist',
-    position: inserted.data.position,
-    isNew: true,
-  });
-});
-
-app.use((_req, res) => {
-  res.status(404).json({ message: 'Not found' });
-});
-
-app.listen(env.PORT, () => {
-  console.log(`tl-temp-backend listening on port ${env.PORT}`);
-});
-
-async function findWaitlistEntry(email: string): Promise<WaitlistRow | null> {
-  const { data, error } = await supabase
-    .from('waitlist')
-    .select('id,email,position,created_at,confirmed,metadata')
-    .eq('email', email)
-    .maybeSingle<WaitlistRow>();
-
-  if (error) {
-    console.error('Supabase waitlist lookup failed:', error);
-    return null;
-  }
-
-  return data;
+  return jsonResponse(
+    {
+      message: 'Successfully joined waitlist',
+      position: inserted.data.position,
+      isNew: true,
+    },
+    201,
+    corsHeaders,
+  );
 }
 
-async function sendWelcomeEmail(entry: WaitlistRow): Promise<void> {
-  const html = renderWaitlistEmail(entry);
-  const text = [
+async function sendWelcomeEmail(entry: WaitlistRow, env: Env): Promise<void> {
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: env.RESEND_FROM_EMAIL,
+      to: entry.email,
+      subject: "You're on the Transfer Legacy waitlist",
+      text: renderWaitlistText(entry),
+      html: renderWaitlistEmail(entry),
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Resend failed: ${response.status} ${body}`);
+  }
+}
+
+function renderWaitlistText(entry: WaitlistRow): string {
+  return [
     "You're officially on the Transfer Legacy waitlist.",
     '',
     `Your spot is saved${entry.position ? `: #${entry.position}` : ''}.`,
@@ -153,14 +171,6 @@ async function sendWelcomeEmail(entry: WaitlistRow): Promise<void> {
     'Welcome aboard.',
     'The Transfer Legacy Team',
   ].join('\n');
-
-  await resend.emails.send({
-    from: env.RESEND_FROM_EMAIL,
-    to: entry.email,
-    subject: "You're on the Transfer Legacy waitlist",
-    text,
-    html,
-  });
 }
 
 function renderWaitlistEmail(entry: WaitlistRow): string {
@@ -286,6 +296,42 @@ function renderWaitlistEmail(entry: WaitlistRow): string {
     </div>
   </body>
 </html>`;
+}
+
+function buildCorsHeaders(request: Request, env: Env): Headers {
+  const origin = request.headers.get('origin') ?? '';
+  const allowedOrigins = (env.FRONTEND_ORIGIN ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const allowOrigin = allowedOrigins.includes(origin) ? origin : allowedOrigins[0] ?? '*';
+
+  const headers = new Headers(jsonHeaders);
+  headers.set('access-control-allow-origin', allowOrigin);
+  headers.set('access-control-allow-methods', 'GET,POST,OPTIONS');
+  headers.set('access-control-allow-headers', 'Content-Type');
+  headers.set('vary', 'Origin');
+  return headers;
+}
+
+function jsonResponse(body: unknown, status: number, headers: Headers): Response {
+  return new Response(JSON.stringify(body), { status, headers });
+}
+
+async function safeParseJson(request: Request): Promise<Record<string, unknown> | null> {
+  try {
+    const data = await request.json();
+    if (typeof data === 'object' && data !== null) {
+      return data as Record<string, unknown>;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function isValidEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 function escapeHtml(value: string): string {

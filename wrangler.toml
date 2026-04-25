@@ -1,0 +1,6 @@
+name = "tl-temp-backend"
+main = "src/worker.ts"
+compatibility_date = "2026-04-25"
+
+[observability]
+enabled = true
