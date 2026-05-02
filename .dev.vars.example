@@ -2,4 +2,17 @@ FRONTEND_ORIGIN=http://localhost:5173
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SECRET_KEY=your-secret-key
 RESEND_API_KEY=re_your_resend_key
-RESEND_FROM_EMAIL=Transfer Legacy <waitlist@transferlegacy.com>
+RESEND_FROM_EMAIL="Transfer Legacy <waitlist@transferlegacy.com>"
+RESEND_FROM_NAME="Transfer Legacy"
+OPS_ADMIN_EMAIL=admin@transferlegacy.com
+OPS_ADMIN_PASSWORD=change-me
+OPS_JWT_SECRET=replace-with-long-random-secret
+
+BACKBLAZE_B2_KEY_ID=key-id
+BACKBLAZE_B2_APP_KEY=app-key
+BACKBLAZE_B2_BUCKET_NAME=tl-user-files-prod
+BACKBLAZE_B2_PUBLIC_ASSETS_BUCKET_NAME=tl-public-assets-prod
+BACKBLAZE_B2_ENDPOINT_URL=https://s3.us-west-000.backblazeb2.com
+BACKBLAZE_B2_REGION=us-west-000
+# Optional CDN/custom public base for public logos.
+# BACKBLAZE_B2_PUBLIC_BASE_URL=https://cdn.transferlegacy.com

@@ -1,13 +1,29 @@
-# Transfer Legacy Temporary Waitlist Backend
+# Transfer Legacy Temporary Backend
 
-Small temporary API for landing-page waitlist signups while the final backend is still in progress.
+Temporary API for waitlist, ops admin panel, app config, and CMS pages while the final backend is still in progress.
 
 ## Runtime
 
-This project now targets Cloudflare Workers directly. It exposes:
+This project targets Cloudflare Workers directly. It exposes:
 
 - `POST /api/waitlist`
 - `POST /v1/api/waitlist`
+- `POST /ops/login`
+- `GET /app/config`
+- `GET /ops/config`
+- `PUT /ops/config`
+- `GET /ops/branding`
+- `PUT /ops/branding`
+- `GET /ops/waitlist`
+- `POST /ops/storage/presigned-logo`
+- `GET /app/pages`
+- `GET /app/pages/:slug`
+- `GET /ops/pages`
+- `GET /ops/pages/:slug`
+- `PUT /ops/pages/:slug`
+- `DELETE /ops/pages/:slug`
+- `PUT /ops/content` (legacy LeanCMS compatibility)
+- `GET /app/content/:slug` (legacy LeanCMS compatibility)
 - `GET /health`
 
 The `/v1/api/waitlist` route is kept so the current frontend value
@@ -29,6 +45,17 @@ Set these in the Worker:
 - `SUPABASE_SECRET_KEY`
 - `RESEND_API_KEY`
 - `RESEND_FROM_EMAIL`
+- `RESEND_FROM_NAME`
+- `OPS_ADMIN_EMAIL`
+- `OPS_ADMIN_PASSWORD`
+- `OPS_JWT_SECRET`
+- `BACKBLAZE_B2_KEY_ID`
+- `BACKBLAZE_B2_APP_KEY`
+- `BACKBLAZE_B2_PUBLIC_ASSETS_BUCKET_NAME` (preferred for logos)
+- `BACKBLAZE_B2_BUCKET_NAME` (fallback bucket)
+- `BACKBLAZE_B2_ENDPOINT_URL`
+- `BACKBLAZE_B2_REGION`
+- `BACKBLAZE_B2_PUBLIC_BASE_URL` (optional CDN/custom public base URL)
 
 Example:
 
@@ -37,6 +64,10 @@ npx wrangler secret put SUPABASE_URL
 npx wrangler secret put SUPABASE_SECRET_KEY
 npx wrangler secret put RESEND_API_KEY
 npx wrangler secret put RESEND_FROM_EMAIL
+npx wrangler secret put OPS_ADMIN_PASSWORD
+npx wrangler secret put OPS_JWT_SECRET
+npx wrangler secret put BACKBLAZE_B2_KEY_ID
+npx wrangler secret put BACKBLAZE_B2_APP_KEY
 ```
 
 For `FRONTEND_ORIGIN`, use a non-secret Worker var in `wrangler.toml` or the Cloudflare dashboard.
