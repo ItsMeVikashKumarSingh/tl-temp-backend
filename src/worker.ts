@@ -344,16 +344,23 @@ async function handleOpsLogin(request: Request, env: Env, corsHeaders: Headers):
     return jsonResponse({ message: 'Email and password are required' }, 400, corsHeaders);
   }
 
+  const fallbackEmail = (env.OPS_ADMIN_EMAIL ?? '').trim().toLowerCase();
+  const fallbackPassword = env.OPS_ADMIN_PASSWORD ?? '';
+  const isFallbackMatch = fallbackEmail && fallbackPassword && email === fallbackEmail && password === fallbackPassword;
+
+  if (isFallbackMatch) {
+    const adminId = crypto.randomUUID();
+    const roleName = 'super_admin';
+    const token = await signToken({ sub: adminId, email, role_name: roleName, exp: Math.floor(Date.now() / 1000) + 43200 }, env);
+    return jsonResponse({ token, admin: { id: adminId, email, role_name: roleName } }, 200, corsHeaders);
+  }
+
   const supabase = getSupabase(env);
   await seedOpsDefaultsIfMissing(env);
   const admin = await findAdminByEmail(supabase, email);
-
-  const fallbackEmail = (env.OPS_ADMIN_EMAIL ?? '').trim().toLowerCase();
-  const fallbackPassword = env.OPS_ADMIN_PASSWORD ?? '';
-  const matchedFallback = fallbackEmail && fallbackPassword && email === fallbackEmail && password === fallbackPassword;
   const matchedDb = admin && admin.is_active && admin.password === password;
 
-  if (!matchedFallback && !matchedDb) {
+  if (!matchedDb) {
     return jsonResponse({ message: 'Invalid credentials' }, 401, corsHeaders);
   }
 
