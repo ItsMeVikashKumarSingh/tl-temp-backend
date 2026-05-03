@@ -22,24 +22,36 @@ jobs:
       - name: Install dependencies
         run: npm ci
       
+      - name: Wrangler Diagnostic
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          echo "Token length: ${#TOKEN}"
+          if [ ${#TOKEN} -ne 40 ]; then
+            echo "Warning: Token length is not 40. Please verify you are using an API Token, not a Global Key."
+          fi
+          npx wrangler whoami --token "$TOKEN"
+
       - name: Deploy to Cloudflare
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
 
       - name: Sync Secrets
         shell: bash
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           OPS_ADMIN_PASSWORD: ${{ secrets.OPS_ADMIN_PASSWORD }}
           OPS_JWT_SECRET: ${{ secrets.OPS_JWT_SECRET }}
           BACKBLAZE_B2_APP_KEY: ${{ secrets.BACKBLAZE_B2_APP_KEY }}
         run: |
-          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+          if [ -z "$TOKEN" ] || [ -z "$ACCOUNT_ID" ]; then
             echo "Cloudflare credentials missing. Skipping sync."
             exit 1
           fi
@@ -50,7 +62,7 @@ jobs:
             local value=$2
             if [ -n "$value" ]; then
               echo "Syncing $name..."
-              echo "$value" | npx wrangler secret put "$name"
+              echo "$value" | npx wrangler secret put "$name" --token "$TOKEN" --account-id "$ACCOUNT_ID"
             else
               echo "Warning: $name is empty, skipping sync."
             fi
