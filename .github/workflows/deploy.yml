@@ -1,0 +1,54 @@
+name: Deploy Worker
+
+on:
+  push:
+    branches:
+      - master
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Sync Secrets
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          OPS_ADMIN_PASSWORD: ${{ secrets.OPS_ADMIN_PASSWORD }}
+          OPS_JWT_SECRET: ${{ secrets.OPS_JWT_SECRET }}
+          BACKBLAZE_B2_APP_KEY: ${{ secrets.BACKBLAZE_B2_APP_KEY }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "CLOUDFLARE_API_TOKEN is not set. Skipping secrets sync and deployment."
+            exit 1
+          fi
+          
+          # Sync secrets one by one
+          # Using printf to avoid trailing newline issues and piping to wrangler
+          echo "Syncing secrets to Cloudflare..."
+          printf "$SUPABASE_SECRET_KEY" | npx wrangler secret put SUPABASE_SECRET_KEY
+          printf "$RESEND_API_KEY" | npx wrangler secret put RESEND_API_KEY
+          printf "$OPS_ADMIN_PASSWORD" | npx wrangler secret put OPS_ADMIN_PASSWORD
+          printf "$OPS_JWT_SECRET" | npx wrangler secret put OPS_JWT_SECRET
+          printf "$BACKBLAZE_B2_APP_KEY" | npx wrangler secret put BACKBLAZE_B2_APP_KEY
+          echo "Secrets synced successfully."
+
+      - name: Deploy to Cloudflare
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          command: deploy

@@ -6,8 +6,8 @@
     "strict": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
-    "types": ["@cloudflare/workers-types"],
-    "noEmit": true
+    "noEmit": true,
+    "lib": ["ES2022"]
   },
   "include": ["src/**/*.ts"]
 }
