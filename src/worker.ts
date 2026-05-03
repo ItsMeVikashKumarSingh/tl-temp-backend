@@ -267,7 +267,8 @@ export default {
       return jsonResponse({ message: 'Not found' }, 404, corsHeaders);
     } catch (err: any) {
       console.error('Request handler crashed:', err);
-      return jsonResponse({ message: 'Internal Server Error', error: err.message }, 500, corsHeaders);
+      // Surface the error so the frontend / logs can see it
+      return jsonResponse({ message: 'Internal Server Error', error: err.message, stack: err.stack }, 500, corsHeaders);
     }
   },
 };
@@ -416,7 +417,9 @@ async function handlePutOpsBranding(request: Request, env: Env, corsHeaders: Hea
     updated_at: new Date().toISOString()
   };
   const { data, error } = await supabase.schema('app').from('settings').upsert({ id: 1, ...payload }).select('*').single();
-  if (error) return jsonResponse({ message: 'Save failed' }, 500, corsHeaders);
+  if (error) {
+    return jsonResponse({ message: 'Save failed', details: error }, 500, corsHeaders);
+  }
   return jsonResponse(data, 200, corsHeaders);
 }
 
@@ -479,8 +482,12 @@ async function getOrCreateConfigRow(env: Env): Promise<AppSettingsRow> {
   const supabase = getSupabase(env);
   const { data, error } = await supabase.schema('app').from('settings').select('*').eq('id', 1).maybeSingle<AppSettingsRow>();
   if (data) return data;
-  if (error && error.code !== 'PGRST116') throw new Error(`DB Error: ${error.message}`);
-  const { data: inserted } = await supabase.schema('app').from('settings').insert({ id: 1, brand_name: 'Transfer Legacy', waitlist_enabled: true }).select('*').single();
+  if (error && error.code !== 'PGRST116') throw new Error(`DB Error (select): ${error.message} - ${error.details || ''}`);
+  
+  const { data: inserted, error: insertError } = await supabase.schema('app').from('settings').insert({ id: 1, brand_name: 'Transfer Legacy', waitlist_enabled: true }).select('*').single();
+  if (insertError) throw new Error(`DB Error (insert): ${insertError.message} - ${insertError.details || ''}`);
+  if (!inserted) throw new Error('DB Error: Inserted row was null');
+  
   return inserted as AppSettingsRow;
 }
 
@@ -551,7 +558,7 @@ async function handleDeleteOpsPageBySlug(env: Env, corsHeaders: Headers, slug: s
 
 async function logActivity(env: Env, adminId: string | null, adminEmail: string | null, action: string, entityType: string | null, entityId: string | null, metadata: Record<string, unknown>, ip: string | null) {
   const supabase = getSupabase(env);
-  await supabase.schema('ops').from('activity_logs').insert({ 
+  const { error } = await supabase.schema('ops').from('activity_logs').insert({ 
     admin_id: adminId, 
     admin_email: adminEmail, 
     action, 
@@ -560,6 +567,10 @@ async function logActivity(env: Env, adminId: string | null, adminEmail: string 
     metadata, 
     ip_address: ip 
   });
+  if (error) {
+    console.error('Failed to log activity:', error);
+    // Don't throw to avoid breaking the main request flow, but log it
+  }
 }
 async function handleGetLegacyContent(env: Env, corsHeaders: Headers, slug: string): Promise<Response> {
   const supabase = getSupabase(env);
