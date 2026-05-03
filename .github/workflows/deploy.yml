@@ -22,6 +22,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
       
+      - name: Deploy to Cloudflare
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
       - name: Sync Secrets
         shell: bash
         env:
@@ -33,23 +39,27 @@ jobs:
           OPS_JWT_SECRET: ${{ secrets.OPS_JWT_SECRET }}
           BACKBLAZE_B2_APP_KEY: ${{ secrets.BACKBLAZE_B2_APP_KEY }}
         run: |
-          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-            echo "CLOUDFLARE_API_TOKEN is not set. Skipping secrets sync and deployment."
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "Cloudflare credentials missing. Skipping sync."
             exit 1
           fi
           
-          # Sync secrets one by one
-          echo "Syncing secrets to Cloudflare..."
-          # We specify --env "" to target the top-level (production) environment
-          printf "$SUPABASE_SECRET_KEY" | npx wrangler secret put SUPABASE_SECRET_KEY --env ""
-          printf "$RESEND_API_KEY" | npx wrangler secret put RESEND_API_KEY --env ""
-          printf "$OPS_ADMIN_PASSWORD" | npx wrangler secret put OPS_ADMIN_PASSWORD --env ""
-          printf "$OPS_JWT_SECRET" | npx wrangler secret put OPS_JWT_SECRET --env ""
-          printf "$BACKBLAZE_B2_APP_KEY" | npx wrangler secret put BACKBLAZE_B2_APP_KEY --env ""
-          echo "Secrets synced successfully."
+          # Function to sync a secret if it's not empty
+          sync_secret() {
+            local name=$1
+            local value=$2
+            if [ -n "$value" ]; then
+              echo "Syncing $name..."
+              echo "$value" | npx wrangler secret put "$name"
+            else
+              echo "Warning: $name is empty, skipping sync."
+            fi
+          }
 
-      - name: Deploy to Cloudflare
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          command: deploy
+          sync_secret "SUPABASE_SECRET_KEY" "$SUPABASE_SECRET_KEY"
+          sync_secret "RESEND_API_KEY" "$RESEND_API_KEY"
+          sync_secret "OPS_ADMIN_PASSWORD" "$OPS_ADMIN_PASSWORD"
+          sync_secret "OPS_JWT_SECRET" "$OPS_JWT_SECRET"
+          sync_secret "BACKBLAZE_B2_APP_KEY" "$BACKBLAZE_B2_APP_KEY"
+          
+          echo "Secrets sync process completed."
