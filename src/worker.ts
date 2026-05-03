@@ -293,7 +293,7 @@ function getSupabase(env: Env) {
 
   return createClient(env.SUPABASE_URL, supabaseKey, {
     auth: { persistSession: false },
-    db: { schema: 'app' } // Default to app schema
+    db: { schema: 'public' } // Default to public schema
   });
 }
 
@@ -489,12 +489,23 @@ async function getOrCreateContactRow(env: Env): Promise<ContactConfigRow> {
   const { data, error } = await supabase.from('contact_config').select('*').eq('id', 1).maybeSingle<ContactConfigRow>();
   if (data) return data;
   if (error && error.code !== 'PGRST116') throw new Error(`DB Error: ${error.message}`);
-  const inserted = await supabase.from('contact_config').insert({ id: 1 }).select('*').single();
-  return inserted.data;
+  
+  const { data: inserted, error: insError } = await supabase.from('contact_config').insert({ 
+    id: 1,
+    office_address: '123 Legacy St, Digital City',
+    support_email: 'support@transferlegacy.com',
+    emails: [],
+    phones: [],
+    social_links: {},
+    working_hours: []
+  }).select('*').single();
+  
+  if (insError) throw new Error(`DB Error: ${insError.message}`);
+  return inserted;
 }
 
 async function findAdminByEmail(supabase: any, email: string) {
-  const { data } = await supabase.from('ops_admins').select('*, role:ops_roles(name)').eq('email', email).maybeSingle();
+  const { data } = await supabase.schema('ops').from('admins').select('*, role:roles(name)').eq('email', email).maybeSingle();
   if (!data) return null;
   return { ...data, role_name: data.role?.name };
 }
@@ -511,12 +522,68 @@ async function handlePutOpsPageBySlug(request: Request, env: Env, corsHeaders: H
 async function handleDeleteOpsPageBySlug(env: Env, corsHeaders: Headers, slug: string, email: string): Promise<Response> { return jsonResponse({}, 200, corsHeaders); }
 async function handleGetLegacyContent(env: Env, corsHeaders: Headers, slug: string): Promise<Response> { return jsonResponse({ slug, body: {}, version: 1 }, 200, corsHeaders); }
 async function handlePutLegacyContent(request: Request, env: Env, corsHeaders: Headers, email: string): Promise<Response> { return jsonResponse({}, 200, corsHeaders); }
-async function handleGetOpsAdmins(env: Env, corsHeaders: Headers): Promise<Response> { return jsonResponse([], 200, corsHeaders); }
-async function handleCreateOpsAdmin(request: Request, env: Env, corsHeaders: Headers): Promise<Response> { return jsonResponse({}, 201, corsHeaders); }
-async function handleDeleteOpsAdmin(env: Env, corsHeaders: Headers, id: string): Promise<Response> { return jsonResponse({}, 200, corsHeaders); }
-async function handleGetOpsRoles(env: Env, corsHeaders: Headers): Promise<Response> { return jsonResponse([], 200, corsHeaders); }
-async function handleCreateOpsRole(request: Request, env: Env, corsHeaders: Headers): Promise<Response> { return jsonResponse({}, 201, corsHeaders); }
-async function handleUpdateOpsRole(request: Request, env: Env, corsHeaders: Headers, id: string): Promise<Response> { return jsonResponse({}, 200, corsHeaders); }
+async function handleGetOpsAdmins(env: Env, corsHeaders: Headers): Promise<Response> {
+  const supabase = getSupabase(env);
+  const { data, error } = await supabase.schema('ops').from('admins').select('*, role:roles(name)');
+  if (error) return jsonResponse({ message: error.message }, 500, corsHeaders);
+  const formatted = (data ?? []).map((a: any) => ({ ...a, role_name: a.role?.name }));
+  return jsonResponse(formatted, 200, corsHeaders);
+}
+
+async function handleCreateOpsAdmin(request: Request, env: Env, corsHeaders: Headers): Promise<Response> {
+  const body = (await safeParseJson(request)) as any;
+  if (!body?.email || !body?.password || !body?.role_id) {
+    return jsonResponse({ message: 'Missing required fields' }, 400, corsHeaders);
+  }
+  const supabase = getSupabase(env);
+  const { error } = await supabase.schema('ops').from('admins').insert({
+    email: body.email,
+    password: body.password, // In real world, hash this
+    role_id: body.role_id,
+    is_active: true
+  });
+  if (error) return jsonResponse({ message: error.message }, 500, corsHeaders);
+  return jsonResponse({ message: 'Admin created' }, 201, corsHeaders);
+}
+
+async function handleDeleteOpsAdmin(env: Env, corsHeaders: Headers, id: string): Promise<Response> {
+  const supabase = getSupabase(env);
+  const { error } = await supabase.schema('ops').from('admins').delete().eq('id', id);
+  if (error) return jsonResponse({ message: error.message }, 500, corsHeaders);
+  return jsonResponse({ message: 'Admin removed' }, 200, corsHeaders);
+}
+
+async function handleGetOpsRoles(env: Env, corsHeaders: Headers): Promise<Response> {
+  const supabase = getSupabase(env);
+  const { data, error } = await supabase.schema('ops').from('roles').select('*');
+  if (error) return jsonResponse({ message: error.message }, 500, corsHeaders);
+  return jsonResponse(data ?? [], 200, corsHeaders);
+}
+
+async function handleCreateOpsRole(request: Request, env: Env, corsHeaders: Headers): Promise<Response> {
+  const body = (await safeParseJson(request)) as any;
+  if (!body?.name) return jsonResponse({ message: 'Name is required' }, 400, corsHeaders);
+  const supabase = getSupabase(env);
+  const { error } = await supabase.schema('ops').from('roles').insert({
+    name: body.name,
+    description: body.description,
+    permissions: body.permissions ?? []
+  });
+  if (error) return jsonResponse({ message: error.message }, 500, corsHeaders);
+  return jsonResponse({ message: 'Role created' }, 201, corsHeaders);
+}
+
+async function handleUpdateOpsRole(request: Request, env: Env, corsHeaders: Headers, id: string): Promise<Response> {
+  const body = (await safeParseJson(request)) as any;
+  const supabase = getSupabase(env);
+  const { error } = await supabase.schema('ops').from('roles').update({
+    name: body.name,
+    description: body.description,
+    permissions: body.permissions ?? []
+  }).eq('id', id);
+  if (error) return jsonResponse({ message: error.message }, 500, corsHeaders);
+  return jsonResponse({ message: 'Role updated' }, 200, corsHeaders);
+}
 
 function buildCorsHeaders(request: Request, env: Env): Headers {
   const origin = request.headers.get('origin') ?? '*';
