@@ -46,24 +46,26 @@ jobs:
           OPS_JWT_SECRET: ${{ secrets.OPS_JWT_SECRET }}
           BACKBLAZE_B2_APP_KEY: ${{ secrets.BACKBLAZE_B2_APP_KEY }}
         run: |
-          # Function to sync a secret if it's not empty
-          sync_secret() {
-            local name=$1
-            local value=$2
-            if [ -n "$value" ]; then
-              echo "Syncing $name..."
-              echo "$value" | npx wrangler secret put "$name"
-            else
-              echo "Warning: $name is empty, skipping sync."
-            fi
-          }
+          # Use jq to safely build a JSON object of all secrets, filtering out empty ones
+          jq -n \
+            --arg supabase "$SUPABASE_SECRET_KEY" \
+            --arg resend "$RESEND_API_KEY" \
+            --arg ops_pwd "$OPS_ADMIN_PASSWORD" \
+            --arg ops_jwt "$OPS_JWT_SECRET" \
+            --arg backblaze "$BACKBLAZE_B2_APP_KEY" \
+            '{
+              SUPABASE_SECRET_KEY: $supabase,
+              RESEND_API_KEY: $resend,
+              OPS_ADMIN_PASSWORD: $ops_pwd,
+              OPS_JWT_SECRET: $ops_jwt,
+              BACKBLAZE_B2_APP_KEY: $backblaze
+            } | with_entries(select(.value != ""))' > secrets.json
 
-          sync_secret "SUPABASE_SECRET_KEY" "$SUPABASE_SECRET_KEY"
-          sync_secret "RESEND_API_KEY" "$RESEND_API_KEY"
-          sync_secret "OPS_ADMIN_PASSWORD" "$OPS_ADMIN_PASSWORD"
-          sync_secret "OPS_JWT_SECRET" "$OPS_JWT_SECRET"
-          sync_secret "BACKBLAZE_B2_APP_KEY" "$BACKBLAZE_B2_APP_KEY"
+          echo "Syncing all secrets in bulk..."
+          npx wrangler secret bulk secrets.json
           
+          # Clean up
+          rm secrets.json
           echo "Secrets sync process completed."
 
 
