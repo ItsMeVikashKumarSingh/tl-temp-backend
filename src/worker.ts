@@ -319,7 +319,7 @@ async function handleWaitlistSignup(request: Request, env: Env, corsHeaders: Hea
     return jsonResponse({ message: 'Waitlist is currently closed' }, 403, corsHeaders);
   }
 
-  const inserted = await supabase
+  const inserted = await supabase.schema('app')
     .from('waitlist')
     .insert({ email, name: name || null, meta: metadata })
     .select('*')
@@ -415,7 +415,7 @@ async function handlePutOpsBranding(request: Request, env: Env, corsHeaders: Hea
     theme_config: isRecord(body.theme_config) ? body.theme_config : {},
     updated_at: new Date().toISOString()
   };
-  const { data, error } = await supabase.from('settings').upsert({ id: 1, ...payload }).select('*').single();
+  const { data, error } = await supabase.schema('app').from('settings').upsert({ id: 1, ...payload }).select('*').single();
   if (error) return jsonResponse({ message: 'Save failed' }, 500, corsHeaders);
   return jsonResponse(data, 200, corsHeaders);
 }
@@ -429,7 +429,13 @@ async function handlePostContactMessage(request: Request, env: Env, corsHeaders:
   const body = (await safeParseJson(request)) as any;
   if (!body?.name || !body?.email || !body?.message) return jsonResponse({ message: 'Missing fields' }, 400, corsHeaders);
   const supabase = getSupabase(env);
-  const { error } = await supabase.from('contact_messages').insert({ ...body, metadata: { ip: getIp(request) } });
+  const { error } = await supabase.schema('app').from('contact_messages').insert({
+    name: body.name,
+    email: body.email,
+    subject: body.subject,
+    message: body.message,
+    metadata: { ...body.metadata, ip: getIp(request) }
+  });
   if (error) return jsonResponse({ message: 'Send failed' }, 500, corsHeaders);
   return jsonResponse({ message: 'Sent' }, 201, corsHeaders);
 }
@@ -440,23 +446,22 @@ async function handleGetOpsContact(env: Env, corsHeaders: Headers): Promise<Resp
 }
 
 async function handlePutOpsContact(request: Request, env: Env, corsHeaders: Headers): Promise<Response> {
-  const body = ((await safeParseJson(request)) as any) ?? {};
+  const body = (await safeParseJson(request)) as any;
   const supabase = getSupabase(env);
-  const payload = { ...body, id: 1, updated_at: new Date().toISOString() };
-  const { data, error } = await supabase.from('contact_config').upsert(payload).select('*').single();
-  if (error) return jsonResponse({ message: 'Update failed' }, 500, corsHeaders);
-  return jsonResponse(data, 200, corsHeaders);
+  const { error } = await supabase.schema('app').from('contact_config').upsert({ id: 1, ...body, updated_at: new Date().toISOString() }).select();
+  if (error) return jsonResponse({ message: error.message }, 500, corsHeaders);
+  return jsonResponse({ message: 'Updated' }, 200, corsHeaders);
 }
 
 async function handleGetOpsContactMessages(env: Env, corsHeaders: Headers): Promise<Response> {
   const supabase = getSupabase(env);
-  const { data } = await supabase.from('contact_messages').select('*').order('created_at', { ascending: false });
+  const { data } = await supabase.schema('app').from('contact_messages').select('*').order('created_at', { ascending: false });
   return jsonResponse(data ?? [], 200, corsHeaders);
 }
 
 async function handleGetWaitlist(env: Env, corsHeaders: Headers): Promise<Response> {
   const supabase = getSupabase(env);
-  const { data } = await supabase.from('waitlist').select('*').order('created_at', { ascending: false });
+  const { data } = await supabase.schema('app').from('waitlist').select('*').order('created_at', { ascending: false });
   return jsonResponse(data ?? [], 200, corsHeaders);
 }
 
@@ -470,38 +475,22 @@ async function handleGetOpsLogs(request: Request, env: Env, corsHeaders: Headers
   return jsonResponse(data ?? [], 200, corsHeaders);
 }
 
-async function logActivity(env: Env, adminId: string | null, adminEmail: string | null, action: string, entityType: string | null, entityId: string | null, metadata: Record<string, unknown>, ip: string | null) {
-  const supabase = getSupabase(env);
-  await supabase.schema('ops').from('activity_logs').insert({ admin_id: adminId, admin_email: adminEmail, action, entity_type: entityType, entity_id: entityId, metadata, ip_address: ip });
-}
-
 async function getOrCreateConfigRow(env: Env): Promise<AppSettingsRow> {
   const supabase = getSupabase(env);
-  const { data, error } = await supabase.from('settings').select('*').eq('id', 1).maybeSingle<AppSettingsRow>();
+  const { data, error } = await supabase.schema('app').from('settings').select('*').eq('id', 1).maybeSingle<AppSettingsRow>();
   if (data) return data;
   if (error && error.code !== 'PGRST116') throw new Error(`DB Error: ${error.message}`);
-  const inserted = await supabase.from('settings').insert({ id: 1 }).select('*').single();
-  return inserted.data;
+  const { data: inserted } = await supabase.schema('app').from('settings').insert({ id: 1, brand_name: 'Transfer Legacy', waitlist_enabled: true }).select('*').single();
+  return inserted as AppSettingsRow;
 }
 
 async function getOrCreateContactRow(env: Env): Promise<ContactConfigRow> {
   const supabase = getSupabase(env);
-  const { data, error } = await supabase.from('contact_config').select('*').eq('id', 1).maybeSingle<ContactConfigRow>();
+  const { data, error } = await supabase.schema('app').from('contact_config').select('*').eq('id', 1).maybeSingle<ContactConfigRow>();
   if (data) return data;
   if (error && error.code !== 'PGRST116') throw new Error(`DB Error: ${error.message}`);
-  
-  const { data: inserted, error: insError } = await supabase.from('contact_config').insert({ 
-    id: 1,
-    office_address: '123 Legacy St, Digital City',
-    support_email: 'support@transferlegacy.com',
-    emails: [],
-    phones: [],
-    social_links: {},
-    working_hours: []
-  }).select('*').single();
-  
-  if (insError) throw new Error(`DB Error: ${insError.message}`);
-  return inserted;
+  const { data: inserted } = await supabase.schema('app').from('contact_config').insert({ id: 1, office_address: '123 Legacy St' }).select('*').single();
+  return inserted as ContactConfigRow;
 }
 
 async function findAdminByEmail(supabase: any, email: string) {
@@ -514,14 +503,98 @@ async function seedOpsDefaultsIfMissing(env: Env) {}
 async function handleCreatePresignedLogoUpload(request: Request, env: Env, corsHeaders: Headers): Promise<Response> {
   return jsonResponse({ upload_url: "https://simulated.com", public_url: "https://cdn.com/logo.png", key: "logo" }, 200, corsHeaders);
 }
-async function handleGetPublicPages(env: Env, corsHeaders: Headers): Promise<Response> { return jsonResponse([], 200, corsHeaders); }
-async function handleGetPublicPageBySlug(env: Env, corsHeaders: Headers, slug: string): Promise<Response> { return jsonResponse({ message: 'Not found' }, 404, corsHeaders); }
-async function handleGetOpsPages(env: Env, corsHeaders: Headers): Promise<Response> { return jsonResponse([], 200, corsHeaders); }
-async function handleGetOpsPageBySlug(env: Env, corsHeaders: Headers, slug: string): Promise<Response> { return jsonResponse({ message: 'Not found' }, 404, corsHeaders); }
-async function handlePutOpsPageBySlug(request: Request, env: Env, corsHeaders: Headers, slug: string, email: string): Promise<Response> { return jsonResponse({}, 200, corsHeaders); }
-async function handleDeleteOpsPageBySlug(env: Env, corsHeaders: Headers, slug: string, email: string): Promise<Response> { return jsonResponse({}, 200, corsHeaders); }
-async function handleGetLegacyContent(env: Env, corsHeaders: Headers, slug: string): Promise<Response> { return jsonResponse({ slug, body: {}, version: 1 }, 200, corsHeaders); }
-async function handlePutLegacyContent(request: Request, env: Env, corsHeaders: Headers, email: string): Promise<Response> { return jsonResponse({}, 200, corsHeaders); }
+async function handleGetPublicPages(env: Env, corsHeaders: Headers): Promise<Response> {
+  const supabase = getSupabase(env);
+  const { data } = await supabase.schema('app').from('cms_pages').select('id, title, slug, description, category, updated_at').eq('is_published', true);
+  return jsonResponse(data ?? [], 200, corsHeaders);
+}
+
+async function handleGetPublicPageBySlug(env: Env, corsHeaders: Headers, slug: string): Promise<Response> {
+  const supabase = getSupabase(env);
+  const { data, error } = await supabase.schema('app').from('cms_pages').select('*').eq('slug', slug).eq('is_published', true).single();
+  if (error) return jsonResponse({ message: 'Page not found' }, 404, corsHeaders);
+  return jsonResponse(data, 200, corsHeaders);
+}
+
+async function handleGetOpsPages(env: Env, corsHeaders: Headers): Promise<Response> {
+  const supabase = getSupabase(env);
+  const { data } = await supabase.schema('app').from('cms_pages').select('*').order('updated_at', { ascending: false });
+  return jsonResponse(data ?? [], 200, corsHeaders);
+}
+
+async function handleGetOpsPageBySlug(env: Env, corsHeaders: Headers, slug: string): Promise<Response> {
+  const supabase = getSupabase(env);
+  const { data, error } = await supabase.schema('app').from('cms_pages').select('*').eq('slug', slug).single();
+  if (error) return jsonResponse({ message: 'Page not found' }, 404, corsHeaders);
+  return jsonResponse(data, 200, corsHeaders);
+}
+
+async function handlePutOpsPageBySlug(request: Request, env: Env, corsHeaders: Headers, slug: string, email: string): Promise<Response> {
+  const body = (await safeParseJson(request)) as any;
+  const supabase = getSupabase(env);
+  const { data, error } = await supabase.schema('app').from('cms_pages').upsert({
+    ...body,
+    slug,
+    updated_at: new Date().toISOString(),
+    updated_by: email
+  }).select('*').single();
+  if (error) return jsonResponse({ message: error.message }, 500, corsHeaders);
+  return jsonResponse(data, 200, corsHeaders);
+}
+
+async function handleDeleteOpsPageBySlug(env: Env, corsHeaders: Headers, slug: string, _email: string): Promise<Response> {
+  const supabase = getSupabase(env);
+  const { error } = await supabase.schema('app').from('cms_pages').delete().eq('slug', slug);
+  if (error) return jsonResponse({ message: error.message }, 500, corsHeaders);
+  return jsonResponse({ message: 'Page deleted' }, 200, corsHeaders);
+}
+
+async function logActivity(env: Env, adminId: string | null, adminEmail: string | null, action: string, entityType: string | null, entityId: string | null, metadata: Record<string, unknown>, ip: string | null) {
+  const supabase = getSupabase(env);
+  await supabase.schema('ops').from('activity_logs').insert({ 
+    admin_id: adminId, 
+    admin_email: adminEmail, 
+    action, 
+    entity_type: entityType, 
+    entity_id: entityId, 
+    metadata, 
+    ip_address: ip 
+  });
+}
+async function handleGetLegacyContent(env: Env, corsHeaders: Headers, slug: string): Promise<Response> {
+  const supabase = getSupabase(env);
+  const { data, error } = await supabase.schema('app')
+    .from('content')
+    .select('*')
+    .eq('slug', slug)
+    .single();
+
+  if (error) {
+    // Return empty but valid structure if not found
+    return jsonResponse({ slug, body: {}, version: 1 }, 200, corsHeaders);
+  }
+  return jsonResponse(data, 200, corsHeaders);
+}
+
+async function handlePutLegacyContent(request: Request, env: Env, corsHeaders: Headers, _email: string): Promise<Response> {
+  const body = (await safeParseJson(request)) as any;
+  if (!body?.slug) return jsonResponse({ message: 'Slug is required' }, 400, corsHeaders);
+  
+  const supabase = getSupabase(env);
+  const { data, error } = await supabase.schema('app')
+    .from('content')
+    .upsert({
+      slug: body.slug,
+      body: body.body,
+      version: (body.version || 0) + 1,
+      updated_at: new Date().toISOString()
+    })
+    .select('*')
+    .single();
+
+  if (error) return jsonResponse({ message: error.message }, 500, corsHeaders);
+  return jsonResponse(data, 200, corsHeaders);
+}
 async function handleGetOpsAdmins(env: Env, corsHeaders: Headers): Promise<Response> {
   const supabase = getSupabase(env);
   const { data, error } = await supabase.schema('ops').from('admins').select('*, role:roles(name)');
