@@ -6,6 +6,9 @@ on:
       - master
       - main
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -36,7 +39,7 @@ jobs:
           echo "CLOUDFLARE_ACCOUNT_ID=$CLEAN_ACCOUNT_ID" >> $GITHUB_ENV
 
       - name: Deploy to Cloudflare
-        run: npx wrangler deploy
+        run: npx wrangler deploy -e=""
 
       - name: Sync Secrets
         env:
@@ -62,7 +65,7 @@ jobs:
             } | with_entries(select(.value != ""))' > secrets.json
 
           echo "Syncing all secrets in bulk..."
-          npx wrangler secret bulk secrets.json
+          npx wrangler secret bulk secrets.json -e=""
           
           # Clean up
           rm secrets.json
