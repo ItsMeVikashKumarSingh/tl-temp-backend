@@ -552,6 +552,27 @@ async function seedOpsDefaultsIfMissing(env: Env) {
       });
     }
   }
+
+  // 3. Seed CMS Content if missing
+  const cmsSlugs = ['hero', 'faqs', 'features', 'team'];
+  const defaultStructures: Record<string, any> = {
+    hero: { title: 'Welcome to Transfer Legacy', subtitle: 'Secure your digital legacy today.' },
+    faqs: { items: [{ q: 'Example Question?', a: 'Example Answer.' }] },
+    features: { items: [{ title: 'Secure Vault', description: 'End-to-end encrypted storage.' }] },
+    team: { items: [{ name: 'John Doe', role: 'Founder', bio: 'Passionate about digital legacy.', imageUrl: '' }] }
+  };
+
+  for (const slug of cmsSlugs) {
+    const { data: existingCms } = await supabase.schema('app').from('content').select('slug').eq('slug', slug).maybeSingle();
+    if (!existingCms) {
+      await supabase.schema('app').from('content').insert({
+        slug,
+        body: defaultStructures[slug],
+        version: 1
+      });
+      console.log(`Seeded CMS content for slug: ${slug}`);
+    }
+  }
 }
 async function handleCreatePresignedLogoUpload(request: Request, env: Env, corsHeaders: Headers): Promise<Response> {
   return jsonResponse({ upload_url: "https://simulated.com", public_url: "https://cdn.com/logo.png", key: "logo" }, 200, corsHeaders);
