@@ -326,20 +326,46 @@ async function handleWaitlistSignup(request: Request, env: Env, corsHeaders: Hea
     return jsonResponse({ message: 'Waitlist is currently closed' }, 403, corsHeaders);
   }
 
-  const inserted = await supabase.schema('app')
+  const { data: entry, error: insertError } = await supabase.schema('app')
     .from('waitlist')
     .insert({ email, name: name || null, meta: metadata })
     .select('*')
     .single<WaitlistRow>();
 
-  if (inserted.error) {
-    if (inserted.error.code === '23505') {
-      return jsonResponse({ message: 'Already on waitlist', isNew: false }, 200, corsHeaders);
+  let targetEntry = entry;
+  let isNew = true;
+
+  if (insertError) {
+    if (insertError.code === '23505') {
+      // Duplicate email, fetch the existing entry to get its position
+      const { data: existing } = await supabase.schema('app')
+        .from('waitlist')
+        .select('*')
+        .eq('email', email)
+        .maybeSingle<WaitlistRow>();
+      
+      targetEntry = existing;
+      isNew = false;
+    } else {
+      return jsonResponse({ message: 'Waitlist signup failed' }, 500, corsHeaders);
     }
-    return jsonResponse({ message: 'Waitlist signup failed' }, 500, corsHeaders);
   }
 
-  return jsonResponse({ message: 'Successfully joined waitlist', isNew: true }, 201, corsHeaders);
+  // Calculate position (count of entries created at or before this one)
+  let position = 0;
+  if (targetEntry) {
+    const { count } = await supabase.schema('app')
+      .from('waitlist')
+      .select('*', { count: 'exact', head: true })
+      .lte('created_at', targetEntry.created_at);
+    position = count || 0;
+  }
+
+  if (isNew) {
+    return jsonResponse({ message: 'Successfully joined waitlist', isNew: true, position }, 201, corsHeaders);
+  } else {
+    return jsonResponse({ message: 'You are already on the waitlist!', isNew: false, position }, 200, corsHeaders);
+  }
 }
 
 async function handleOpsLogin(request: Request, env: Env, corsHeaders: Headers): Promise<Response> {
