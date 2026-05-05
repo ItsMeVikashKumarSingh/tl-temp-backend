@@ -139,7 +139,11 @@ export default {
         return handleOpsLogin(request, env, corsHeaders);
       }
 
-      if (request.method === 'GET' && (url.pathname === '/app/config' || url.pathname === '/v1/app/config')) {
+      if (
+        request.method === 'GET' && 
+        (url.pathname === '/app/config' || url.pathname === '/v1/app/config' || 
+         url.pathname === '/app/branding' || url.pathname === '/v1/app/branding')
+      ) {
         return handleGetPublicConfig(env, corsHeaders);
       }
 
