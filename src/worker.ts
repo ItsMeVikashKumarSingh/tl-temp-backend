@@ -242,27 +242,27 @@ export default {
         }
 
         if (request.method === 'PUT' && path === '/ops/content') {
-          return handlePutLegacyContent(request, env, corsHeaders, auth.claims.email);
+          return handlePutLegacyContent(request, env, corsHeaders, auth.claims.sub, auth.claims.email);
         }
 
         if (request.method === 'GET' && path === '/ops/admins') {
           return handleGetOpsAdmins(env, corsHeaders);
         }
         if (request.method === 'POST' && path === '/ops/admins') {
-          return handleCreateOpsAdmin(request, env, corsHeaders);
+          return handleCreateOpsAdmin(request, env, corsHeaders, auth.claims.sub, auth.claims.email);
         }
         if (request.method === 'DELETE' && path.startsWith('/ops/admins/')) {
-          return handleDeleteOpsAdmin(env, corsHeaders, decodeLastSegment(path));
+          return handleDeleteOpsAdmin(env, corsHeaders, decodeLastSegment(path), auth.claims.sub, auth.claims.email);
         }
 
         if (request.method === 'GET' && path === '/ops/roles') {
           return handleGetOpsRoles(env, corsHeaders);
         }
         if (request.method === 'POST' && path === '/ops/roles') {
-          return handleCreateOpsRole(request, env, corsHeaders);
+          return handleCreateOpsRole(request, env, corsHeaders, auth.claims.sub, auth.claims.email);
         }
         if (request.method === 'PUT' && path.startsWith('/ops/roles/')) {
-          return handleUpdateOpsRole(request, env, corsHeaders, decodeLastSegment(path));
+          return handleUpdateOpsRole(request, env, corsHeaders, decodeLastSegment(path), auth.claims.sub, auth.claims.email);
         }
 
         if (request.method === 'GET' && path === '/ops/logs') {
@@ -362,6 +362,9 @@ async function handleWaitlistSignup(request: Request, env: Env, corsHeaders: Hea
   }
 
   if (isNew) {
+    // Send welcome email asynchronously (don't block the response)
+    const emailPromise = sendWaitlistEmail(env, email, name || 'there', position);
+    
     return jsonResponse({ message: 'Successfully joined waitlist', isNew: true, position }, 201, corsHeaders);
   } else {
     return jsonResponse({ message: 'You are already on the waitlist!', isNew: false, position }, 200, corsHeaders);
@@ -684,7 +687,7 @@ async function handleGetLegacyContent(env: Env, corsHeaders: Headers, slug: stri
   return jsonResponse(data, 200, corsHeaders);
 }
 
-async function handlePutLegacyContent(request: Request, env: Env, corsHeaders: Headers, _email: string): Promise<Response> {
+async function handlePutLegacyContent(request: Request, env: Env, corsHeaders: Headers, adminId: string, email: string): Promise<Response> {
   const body = (await safeParseJson(request)) as any;
   if (!body?.slug) return jsonResponse({ message: 'Slug is required' }, 400, corsHeaders);
   
@@ -701,6 +704,9 @@ async function handlePutLegacyContent(request: Request, env: Env, corsHeaders: H
     .single();
 
   if (error) return jsonResponse({ message: error.message }, 500, corsHeaders);
+
+  await logActivity(env, adminId, email, 'update_content', 'content', body.slug, {}, getIp(request));
+
   return jsonResponse(data, 200, corsHeaders);
 }
 async function handleGetOpsAdmins(env: Env, corsHeaders: Headers): Promise<Response> {
@@ -711,26 +717,38 @@ async function handleGetOpsAdmins(env: Env, corsHeaders: Headers): Promise<Respo
   return jsonResponse(formatted, 200, corsHeaders);
 }
 
-async function handleCreateOpsAdmin(request: Request, env: Env, corsHeaders: Headers): Promise<Response> {
+async function handleCreateOpsAdmin(request: Request, env: Env, corsHeaders: Headers, adminId: string, email: string): Promise<Response> {
   const body = (await safeParseJson(request)) as any;
   if (!body?.email || !body?.password || !body?.role_id) {
     return jsonResponse({ message: 'Missing required fields' }, 400, corsHeaders);
   }
   const supabase = getSupabase(env);
-  const { error } = await supabase.schema('ops').from('admins').insert({
+  const { data: newAdmin, error } = await supabase.schema('ops').from('admins').insert({
     email: body.email,
     password: body.password, // In real world, hash this
     role_id: body.role_id,
     is_active: true
-  });
+  }).select('id').single();
+
   if (error) return jsonResponse({ message: error.message }, 500, corsHeaders);
+
+  if (newAdmin) {
+    await logActivity(env, adminId, email, 'create_admin', 'admin', newAdmin.id, {}, getIp(request));
+    
+    // Send welcome email
+    await sendAdminWelcomeEmail(env, body.email, body.password);
+  }
+
   return jsonResponse({ message: 'Admin created' }, 201, corsHeaders);
 }
 
-async function handleDeleteOpsAdmin(env: Env, corsHeaders: Headers, id: string): Promise<Response> {
+async function handleDeleteOpsAdmin(env: Env, corsHeaders: Headers, id: string, adminId: string, email: string): Promise<Response> {
   const supabase = getSupabase(env);
   const { error } = await supabase.schema('ops').from('admins').delete().eq('id', id);
   if (error) return jsonResponse({ message: error.message }, 500, corsHeaders);
+
+  await logActivity(env, adminId, email, 'delete_admin', 'admin', id, {}, null);
+
   return jsonResponse({ message: 'Admin removed' }, 200, corsHeaders);
 }
 
@@ -741,20 +759,26 @@ async function handleGetOpsRoles(env: Env, corsHeaders: Headers): Promise<Respon
   return jsonResponse(data ?? [], 200, corsHeaders);
 }
 
-async function handleCreateOpsRole(request: Request, env: Env, corsHeaders: Headers): Promise<Response> {
+async function handleCreateOpsRole(request: Request, env: Env, corsHeaders: Headers, adminId: string, email: string): Promise<Response> {
   const body = (await safeParseJson(request)) as any;
   if (!body?.name) return jsonResponse({ message: 'Name is required' }, 400, corsHeaders);
   const supabase = getSupabase(env);
-  const { error } = await supabase.schema('ops').from('roles').insert({
+  const { data: newRole, error } = await supabase.schema('ops').from('roles').insert({
     name: body.name,
     description: body.description,
     permissions: body.permissions ?? []
-  });
+  }).select('id').single();
+
   if (error) return jsonResponse({ message: error.message }, 500, corsHeaders);
+
+  if (newRole) {
+    await logActivity(env, adminId, email, 'create_role', 'role', newRole.id, {}, getIp(request));
+  }
+
   return jsonResponse({ message: 'Role created' }, 201, corsHeaders);
 }
 
-async function handleUpdateOpsRole(request: Request, env: Env, corsHeaders: Headers, id: string): Promise<Response> {
+async function handleUpdateOpsRole(request: Request, env: Env, corsHeaders: Headers, id: string, adminId: string, email: string): Promise<Response> {
   const body = (await safeParseJson(request)) as any;
   const supabase = getSupabase(env);
   const { error } = await supabase.schema('ops').from('roles').update({
@@ -762,7 +786,11 @@ async function handleUpdateOpsRole(request: Request, env: Env, corsHeaders: Head
     description: body.description,
     permissions: body.permissions ?? []
   }).eq('id', id);
+
   if (error) return jsonResponse({ message: error.message }, 500, corsHeaders);
+
+  await logActivity(env, adminId, email, 'update_role', 'role', id, {}, getIp(request));
+
   return jsonResponse({ message: 'Role updated' }, 200, corsHeaders);
 }
 
@@ -775,5 +803,112 @@ async function safeParseJson(request: Request) { try { return await request.json
 function isValidEmail(e: string) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e); }
 function isRecord(v: unknown): v is Record<string, unknown> { return typeof v === 'object' && v !== null && !Array.isArray(v); }
 function sanitizeFileName(n: string) { return n.replace(/[^a-z0-9.]/gi, '-').toLowerCase(); }
+
+async function sendWaitlistEmail(env: Env, to: string, name: string, position: number) {
+  if (!env.RESEND_API_KEY) {
+    console.warn('RESEND_API_KEY not configured, skipping email');
+    return;
+  }
+
+  const from = env.RESEND_FROM_EMAIL || 'Transfer Legacy <no-reply@transferlegacy.com>';
+  const subject = 'Welcome to the Transfer Legacy Waitlist!';
+  
+  const html = `
+    <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; color: #111827;">
+      <h1 style="color: #4F5CFF;">Welcome to the Waitlist!</h1>
+      <p>Hi ${name},</p>
+      <p>Thank you for joining the waitlist for <strong>Transfer Legacy</strong>. We're excited to have you with us!</p>
+      <div style="background: #F3F4F6; padding: 20px; border-radius: 12px; margin: 24px 0; text-align: center;">
+        <p style="margin: 0; font-size: 14px; text-transform: uppercase; letter-spacing: 0.1em; color: #6B7280;">Your Position</p>
+        <p style="margin: 8px 0 0; font-size: 32px; font-weight: bold; color: #4F5CFF;">#${position.toLocaleString()}</p>
+      </div>
+      <p>We'll notify you as soon as beta access becomes available for your position.</p>
+      <p>Stay tuned,<br>The Transfer Legacy Team</p>
+      <hr style="border: 0; border-top: 1px solid #E5E7EB; margin: 32px 0;">
+      <p style="font-size: 12px; color: #9CA3AF;">&copy; 2026 Transfer Legacy. All rights reserved.</p>
+    </div>
+  `;
+
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        from,
+        to: [to],
+        subject,
+        html
+      })
+    });
+
+    if (!res.ok) {
+      const error = await res.text();
+      console.error('Failed to send email via Resend:', error);
+    }
+  } catch (err) {
+    console.error('Error sending waitlist email:', err);
+  }
+}
+
+async function sendAdminWelcomeEmail(env: Env, to: string, password: string) {
+  if (!env.RESEND_API_KEY) {
+    console.warn('RESEND_API_KEY not configured, skipping email');
+    return;
+  }
+
+  const from = env.RESEND_FROM_EMAIL || 'Transfer Legacy Control <security@transferlegacy.com>';
+  const subject = 'Administrator Access Granted - Transfer Legacy';
+  
+  const html = `
+    <div style="font-family: serif; max-width: 600px; margin: 0 auto; padding: 32px; background: #f5f5f0; color: #1f1d1b;">
+      <div style="background: #ffffff; border: 1px solid #e0ddd7; border-radius: 12px; padding: 28px; box-shadow: 0 8px 24px rgba(22, 18, 14, 0.08);">
+        <span style="display: inline-block; background: #1f1d1b; color: #f5f5f0; padding: 6px 12px; border-radius: 999px; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;">System Access</span>
+        <h1 style="margin: 16px 0 12px; font-size: 28px; line-height: 1.2;">Welcome to the Control Center</h1>
+        <p style="font-size: 16px; line-height: 1.6;">You have been granted administrator access to <strong>Transfer Legacy</strong>. Your account has been created with the following credentials:</p>
+        
+        <div style="background: #f3f0ea; padding: 20px; border-radius: 8px; margin: 20px 0; border: 1px solid #e0ddd7;">
+          <div style="font-family: monospace; font-size: 14px; margin: 5px 0;">
+            <span style="font-weight: bold; color: #5b5752; width: 80px; display: inline-block;">Email:</span> ${to}
+          </div>
+          <div style="font-family: monospace; font-size: 14px; margin: 5px 0;">
+            <span style="font-weight: bold; color: #5b5752; width: 80px; display: inline-block;">Password:</span> ${password}
+          </div>
+        </div>
+
+        <p style="font-size: 16px; line-height: 1.6;">You can now login to the administrator portal using the link below:</p>
+        
+        <a href="${env.FRONTEND_ORIGIN || 'https://ops.transferlegacy.com'}/ops/login" style="display: inline-block; margin: 18px 0 8px; padding: 12px 18px; background: #1f1d1b; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600;">Login to Control Center</a>
+
+        <p style="margin-top: 20px; font-size: 14px; color: #5b5752; font-style: italic;">For security reasons, we recommend changing your password after your first login.</p>
+      </div>
+      <div style="margin-top: 22px; font-size: 12px; color: #6f6b65;">
+        <p>This is an automated security notification. If you did not expect this, please contact the system administrator immediately.</p>
+        <p>&copy; 2026 Transfer Legacy. All rights reserved.</p>
+      </div>
+    </div>
+  `;
+
+  try {
+    await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        from,
+        to: [to],
+        subject,
+        html
+      })
+    });
+  } catch (err) {
+    console.error('Error sending admin welcome email:', err);
+  }
+}
+
 async function signToken(c: any, e: any) { return btoa(JSON.stringify(c)) + "." + btoa(e.OPS_JWT_SECRET || 's'); }
 async function verifyToken(t: string, e: any) { try { return JSON.parse(atob(t.split('.')[0])); } catch { return null; } }
