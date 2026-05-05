@@ -40,6 +40,8 @@ type AppSettingsRow = {
   support_phone: string | null;
   support_address: string | null;
   waitlist_enabled: boolean;
+  registration_enabled: boolean;
+  maintenance_mode: boolean;
   theme_config: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -390,6 +392,8 @@ async function handleGetPublicConfig(env: Env, corsHeaders: Headers): Promise<Re
   const row = await getOrCreateConfigRow(env);
   return jsonResponse({
     waitlist_enabled: row.waitlist_enabled,
+    registration_enabled: row.registration_enabled,
+    maintenance_mode: row.maintenance_mode,
     brand_name: row.brand_name,
     logo_url: row.logo_url,
     support_email: row.support_email,
@@ -413,12 +417,14 @@ async function handlePutOpsBranding(request: Request, env: Env, corsHeaders: Hea
     support_phone: body.support_phone ?? null,
     support_address: body.support_address ?? null,
     waitlist_enabled: typeof body.waitlist_enabled === 'boolean' ? body.waitlist_enabled : true,
+    registration_enabled: typeof body.registration_enabled === 'boolean' ? body.registration_enabled : true,
+    maintenance_mode: typeof body.maintenance_mode === 'boolean' ? body.maintenance_mode : false,
     theme_config: isRecord(body.theme_config) ? body.theme_config : {},
     updated_at: new Date().toISOString()
   };
   const { data, error } = await supabase.schema('app').from('settings').upsert({ id: 1, ...payload }).select('*').single();
   if (error) {
-    return jsonResponse({ message: 'Save failed', details: error }, 500, corsHeaders);
+    return jsonResponse({ message: 'Save failed', details: error.message, code: error.code }, 500, corsHeaders);
   }
   return jsonResponse(data, 200, corsHeaders);
 }
@@ -484,7 +490,13 @@ async function getOrCreateConfigRow(env: Env): Promise<AppSettingsRow> {
   if (data) return data;
   if (error && error.code !== 'PGRST116') throw new Error(`DB Error (select): ${error.message} - ${error.details || ''}`);
   
-  const { data: inserted, error: insertError } = await supabase.schema('app').from('settings').insert({ id: 1, brand_name: 'Transfer Legacy', waitlist_enabled: true }).select('*').single();
+  const { data: inserted, error: insertError } = await supabase.schema('app').from('settings').insert({ 
+    id: 1, 
+    brand_name: 'Transfer Legacy', 
+    waitlist_enabled: true,
+    registration_enabled: true,
+    maintenance_mode: false
+  }).select('*').single();
   if (insertError) throw new Error(`DB Error (insert): ${insertError.message} - ${insertError.details || ''}`);
   if (!inserted) throw new Error('DB Error: Inserted row was null');
   
@@ -506,7 +518,41 @@ async function findAdminByEmail(supabase: any, email: string) {
   return { ...data, role_name: data.role?.name };
 }
 
-async function seedOpsDefaultsIfMissing(env: Env) {}
+async function seedOpsDefaultsIfMissing(env: Env) {
+  const supabase = getSupabase(env);
+  
+  // 1. Seed Roles
+  const { data: roles } = await supabase.schema('ops').from('roles').select('id').eq('name', 'super_admin').maybeSingle();
+  let superAdminRoleId = roles?.id;
+  
+  if (!superAdminRoleId) {
+    const { data: newRole, error: roleError } = await supabase.schema('ops').from('roles').insert({
+      name: 'super_admin',
+      description: 'Full system access',
+      permissions: ['read', 'write', 'delete', 'cms.manage', 'admins.manage', 'settings.manage', 'waitlist.manage', 'audit.read']
+    }).select('id').single();
+    
+    if (!roleError && newRole) {
+      superAdminRoleId = newRole.id;
+    }
+  }
+
+  // 2. Seed Initial Admin if env vars exist
+  const adminEmail = (env.OPS_ADMIN_EMAIL ?? '').trim().toLowerCase();
+  const adminPassword = env.OPS_ADMIN_PASSWORD ?? '';
+  
+  if (adminEmail && adminPassword && superAdminRoleId) {
+    const { data: existingAdmin } = await supabase.schema('ops').from('admins').select('id').eq('email', adminEmail).maybeSingle();
+    if (!existingAdmin) {
+      await supabase.schema('ops').from('admins').insert({
+        email: adminEmail,
+        password: adminPassword,
+        role_id: superAdminRoleId,
+        is_active: true
+      });
+    }
+  }
+}
 async function handleCreatePresignedLogoUpload(request: Request, env: Env, corsHeaders: Headers): Promise<Response> {
   return jsonResponse({ upload_url: "https://simulated.com", public_url: "https://cdn.com/logo.png", key: "logo" }, 200, corsHeaders);
 }
