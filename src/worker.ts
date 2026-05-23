@@ -362,8 +362,8 @@ async function handleWaitlistSignup(request: Request, env: Env, corsHeaders: Hea
   }
 
   if (isNew) {
-    // Send welcome email asynchronously (don't block the response)
-    const emailPromise = sendWaitlistEmail(env, email, name || 'there', position);
+    // Send welcome email (await to ensure Cloudflare Worker context doesn't terminate before it's sent)
+    await sendWaitlistEmail(env, email, name || 'there', position);
     
     return jsonResponse({ message: 'Successfully joined waitlist', isNew: true, position }, 201, corsHeaders);
   } else {
